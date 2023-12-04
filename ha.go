@@ -40,23 +40,27 @@ type manager struct {
 }
 
 func NewNode(ctx context.Context, priority int, groupIp, groupPort, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
-	n.m = new(manager)
+	n = &Node{
+		m: &manager{
+			groupIp:           groupIp,
+			groupPort:         groupPort,
+			heatbeatFrequency: hbFrequency,
+			trigAfter:         trigAfter,
+			candidateDuration: candidateDuration,
+			state:             state,
+			priority:          priority,
+		},
+	}
 	n.m.rootContext, n.m.rootCancel = context.WithCancel(ctx)
-	n.m.groupPort = groupPort
-	n.m.groupIp = groupIp
-	n.m.heatbeatFrequency = hbFrequency
-	n.m.trigAfter = trigAfter
-	n.m.candidateDuration = candidateDuration
-	n.m.state = state
-	n.m.priority = priority
 	addr := n.m.groupIp + ":" + n.m.groupPort
 	uAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
+		n = nil
 		return
 	}
 	n.m.conn, err = net.ListenMulticastUDP("udp", nil, uAddr)
 	if err != nil {
-		return
+		n = nil
 	}
 	return
 }
@@ -123,6 +127,13 @@ func (m *manager) checkMasterQualification(priority int) (result bool) {
 }
 
 func (m *manager) candidate(ctx context.Context) {
+	var state string
+	m.statelocker.RLock()
+	state = m.state
+	m.statelocker.RUnlock()
+	if state != "candidate" {
+		return
+	}
 	m.candidateFlag.Store(true)
 	timer := time.NewTimer(m.candidateDuration)
 	select {
@@ -145,8 +156,8 @@ func (m *manager) candidate(ctx context.Context) {
 // 注册选举程序，如果在trigAfter时间内没收到心跳，选举程序就会触发
 func (m *manager) registerCandidate() {
 	trigFunc := func() {
-		childCtx, canncel := context.WithCancel(m.rootContext)
-		m.candiCanncel = canncel
+		childCtx, cancel := context.WithCancel(m.rootContext)
+		m.candiCanncel = cancel
 		m.candidate(childCtx)
 	}
 	m.timeout = time.AfterFunc(m.trigAfter, trigFunc)
@@ -163,7 +174,9 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 		n.m.heartBeatHandler(data)
 	}
 	n.m.registerCandidate()
-	n.m.listenMultiCast(handler)
+	ctx, cancel := context.WithCancel(n.m.rootContext)
+	defer cancel()
+	n.m.listenMultiCast(ctx, handler)
 	return
 }
 
@@ -187,8 +200,8 @@ func startWithRecovery(ctx context.Context, job func(context.Context), recoverTi
 		}()
 		f(childCtx)
 	}
-	watcherCtx, watcherCancal := context.WithCancel(ctx)
-	defer watcherCancal()
+	watcherCtx, watcherCancel := context.WithCancel(ctx)
+	defer watcherCancel()
 	for {
 		select {
 		case <-ctx.Done():
@@ -254,8 +267,10 @@ func (n *Node) WatchAndRun(job func(context.Context), recovery bool, duration ti
 			n.m.timeout.Stop()
 		}
 	}()
-	n.m.timeout.Stop()
-	n.m.timeout.Reset(n.m.trigAfter)
+	if n.m.timeout != nil {
+		n.m.timeout.Stop()
+		n.m.timeout.Reset(n.m.trigAfter)
+	}
 	var state string
 	n.m.statelocker.RLock()
 	state = n.m.state
