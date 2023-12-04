@@ -49,6 +49,7 @@ func NewNode(ctx context.Context, priority int, groupIp, groupPort, state string
 			candidateDuration: candidateDuration,
 			state:             state,
 			priority:          priority,
+			stateChan:         make(chan int),
 		},
 	}
 	n.m.rootContext, n.m.rootCancel = context.WithCancel(ctx)
@@ -104,6 +105,7 @@ func (m *manager) sendHeatBeatLoop(ctx context.Context) {
 		m.beatFlag.Store(false)
 		heatbeatTicker.Stop()
 	}()
+	logrus.Info("start sending heartbeat")
 	for {
 		select {
 		case <-heatbeatTicker.C:
@@ -127,17 +129,12 @@ func (m *manager) checkMasterQualification(priority int) (result bool) {
 }
 
 func (m *manager) candidate(ctx context.Context) {
-	var state string
-	m.statelocker.RLock()
-	state = m.state
-	m.statelocker.RUnlock()
-	if state != "candidate" {
-		return
-	}
+	logrus.Info("heartbeat timeout, start candidate")
 	m.candidateFlag.Store(true)
 	timer := time.NewTimer(m.candidateDuration)
 	select {
 	case <-timer.C:
+		logrus.Info("win candidate, work as master")
 		m.statelocker.Lock()
 		m.state = "master"
 		m.statelocker.Unlock()
@@ -158,6 +155,18 @@ func (m *manager) registerCandidate() {
 	trigFunc := func() {
 		childCtx, cancel := context.WithCancel(m.rootContext)
 		m.candiCanncel = cancel
+		var state string
+		m.statelocker.RLock()
+		state = m.state
+		m.statelocker.RUnlock()
+		if state == "master" {
+			return
+		} else if state == "backup" {
+			m.statelocker.Lock()
+			m.state = "candidate"
+			m.statelocker.Unlock()
+			m.stateChan <- 1
+		}
 		m.candidate(childCtx)
 	}
 	m.timeout = time.AfterFunc(m.trigAfter, trigFunc)
@@ -176,6 +185,7 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 	n.m.registerCandidate()
 	ctx, cancel := context.WithCancel(n.m.rootContext)
 	defer cancel()
+	logrus.Info("start listening")
 	n.m.listenMultiCast(ctx, handler)
 	return
 }
