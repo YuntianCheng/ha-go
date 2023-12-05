@@ -26,6 +26,7 @@ type Node struct {
 type manager struct {
 	groupIp           string
 	groupPort         string
+	groupId           string
 	priority          int
 	timeout           *time.Timer
 	timeoutLocker     sync.Mutex
@@ -46,11 +47,12 @@ type manager struct {
 	state             string
 }
 
-func NewNode(ctx context.Context, priority int, groupIp, groupPort, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
+func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
 	n = &Node{
 		m: &manager{
 			groupIp:           groupIp,
 			groupPort:         groupPort,
+			groupId:           groupId,
 			heatbeatFrequency: hbFrequency,
 			trigAfter:         trigAfter,
 			candidateDuration: candidateDuration,
@@ -85,7 +87,10 @@ func (m *manager) heartBeatHandler(n int, data []byte) {
 	if err != nil {
 		logrus.Error(err)
 	}
-	logrus.Infof("received heartbeat, priority is %v, time is %v", hb.Priority, time.Unix(hb.Timestamp, 0))
+	if hb.GroupId != m.groupId {
+		return
+	}
+	logrus.Infof("received heartbeat, priority is %v, time is %v, group id is %v", hb.Priority, time.Unix(hb.Timestamp, 0), hb.GroupId)
 	if m.checkMasterQualification(hb.Priority) {
 		m.timeoutLocker.Lock()
 		if m.timeout != nil && m.timeout.Stop() {
@@ -124,6 +129,7 @@ func (m *manager) sendHeatBeatLoop(ctx context.Context) {
 			heatbeat := models.Heartbeat{
 				Priority:  m.priority,
 				Timestamp: time.Now().Unix(),
+				GroupId:   m.groupId,
 			}
 			err := m.sendHeatbeat(heatbeat)
 			if err != nil {

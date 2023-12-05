@@ -10,7 +10,7 @@ import (
 )
 
 func TestMaster(t *testing.T) {
-	node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "master", 1*time.Second, 5*time.Second, 5*time.Second)
+	node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "001", "master", 1*time.Second, 5*time.Second, 5*time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
@@ -37,7 +37,7 @@ func TestMaster(t *testing.T) {
 		}
 	}
 	go func() {
-		err = node.WatchAndRun(job, false, 0)
+		err = node.WatchAndRun(job, true, 0)
 		if err != nil {
 			fmt.Println(err.Error())
 			node.Stop()
