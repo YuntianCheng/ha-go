@@ -75,6 +75,13 @@ func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, sta
 	return
 }
 
+func (n *Node) Status() (status string) {
+	n.m.statelocker.RLock()
+	status = n.m.state
+	n.m.statelocker.RUnlock()
+	return
+}
+
 func (n *Node) Stop() {
 	if n.m != nil {
 		n.m.rootCancel()
