@@ -117,8 +117,11 @@ func (m *manager) sendHeatBeatLoop(ctx context.Context) {
 			err := m.sendHeatbeat(heatbeat)
 			if err != nil {
 				logrus.Error(err.Error())
+			} else {
+				logrus.Info("send heartbeat successful")
 			}
 		case <-ctx.Done():
+			logrus.Info("stop sending heartbeat")
 			return
 		}
 	}
@@ -143,10 +146,15 @@ func (m *manager) candidate(ctx context.Context) {
 		m.stateChan <- 1
 		return
 	case <-ctx.Done():
+		logrus.Info("cancel candidate, work as backup")
 		if !timer.Stop() {
 			<-timer.C
 		}
+		m.statelocker.Lock()
+		m.state = "backup"
+		m.statelocker.Unlock()
 		m.candidateFlag.Store(false)
+		m.stateChan <- 1
 		return
 	}
 }
@@ -192,17 +200,21 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 }
 
 // 一次性Job用这个执行
-func start(ctx context.Context, job func(context.Context)) {
+func (m *manager) start(ctx context.Context, job func(context.Context)) {
 	defer func() {
 		if p := recover(); p != nil {
 			logrus.Infof("Panic happened：%v", p)
 		}
+		logrus.Info("stop job")
+		m.jobFlag.Store(false)
 	}()
+	m.jobFlag.Store(true)
+	logrus.Info("start job")
 	job(ctx)
 }
 
 // 需要持续运行的Job调用这个执行，panic会自动重启Job，直到上下文被取消
-func startWithRecovery(ctx context.Context, job func(context.Context), recoverTime time.Duration) {
+func (m *manager) startWithRecovery(ctx context.Context, job func(context.Context), recoverTime time.Duration) {
 	recoverer := func(childCtx context.Context, f func(context.Context)) {
 		defer func() {
 			if p := recover(); p != nil {
@@ -211,13 +223,19 @@ func startWithRecovery(ctx context.Context, job func(context.Context), recoverTi
 		}()
 		f(childCtx)
 	}
+	m.jobFlag.Store(true)
 	watcherCtx, watcherCancel := context.WithCancel(ctx)
-	defer watcherCancel()
+	defer func() {
+		m.jobFlag.Store(false)
+		watcherCancel()
+		logrus.Info("stop job")
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+			logrus.Info("start job")
 			recoverer(watcherCtx, job)
 		}
 	}
@@ -240,7 +258,7 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 			m.candiCanncel()
 		}
 		m.timeout.Stop()
-		m.timeout.Reset(2 * time.Second)
+		m.registerCandidate()
 	case "master":
 		if !m.beatFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
@@ -252,15 +270,15 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 			ctx, cancel := context.WithCancel(m.rootContext)
 			m.jobCanncel = cancel
 			if recovery {
-				go startWithRecovery(ctx, job, duration)
+				go m.startWithRecovery(ctx, job, duration)
 			} else {
-				go start(ctx, job)
+				go m.start(ctx, job)
 			}
 		}
 	case "candidate":
 		if !m.beatFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
-			m.candiCanncel = cancel
+			m.beatCanncel = cancel
 			go m.sendHeatBeatLoop(ctx)
 
 		}
@@ -292,7 +310,11 @@ func (n *Node) WatchAndRun(job func(context.Context), recovery bool, duration ti
 		n.m.jobCanncel = jCanncel
 		n.m.beatCanncel = bCanncel
 		go n.m.sendHeatBeatLoop(bctx)
-		go start(jctx, job)
+		if recovery {
+			go n.m.startWithRecovery(jctx, job, duration)
+		} else {
+			go n.m.start(jctx, job)
+		}
 	}
 	for {
 		select {
