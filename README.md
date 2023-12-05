@@ -5,7 +5,7 @@ use multicast achieving master-backup auto switch when the master node is down
 
 ```golang
 // create a node
-node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "master", 1*time.Second, 5*time.Second, 5*time.Second)
+node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "001", "master", 1*time.Second, 5*time.Second, 5*time.Second)
 
 // start listen
 go func() {
