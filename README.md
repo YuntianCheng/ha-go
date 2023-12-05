@@ -1,6 +1,6 @@
 # ha-go
 use multicast achieving master-backup auto switch when the master node is down
-
+ipv4 only
 ## Usage
 
 ```golang
