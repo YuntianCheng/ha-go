@@ -72,12 +72,13 @@ func (n *Node) Stop() {
 	}
 }
 
-func (m *manager) heartBeatHandler(data []byte) {
+func (m *manager) heartBeatHandler(n int, data []byte) {
 	var hb models.Heartbeat
-	err := json.Unmarshal(data, &hb)
+	err := json.Unmarshal(data[:n], &hb)
 	if err != nil {
 		logrus.Error(err)
 	}
+	logrus.Infof("received heartbeat, priority is %v, time is %v", hb.Priority, time.Unix(hb.Timestamp, 0))
 	if m.checkMasterQualification(hb.Priority) {
 		if m.state != "backup" {
 			m.statelocker.Lock()
@@ -180,7 +181,7 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 		if custom != nil {
 			custom(size, addr, data)
 		}
-		n.m.heartBeatHandler(data)
+		n.m.heartBeatHandler(size, data)
 	}
 	n.m.registerCandidate()
 	ctx, cancel := context.WithCancel(n.m.rootContext)
