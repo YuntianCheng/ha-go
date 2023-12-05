@@ -13,6 +13,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+var (
+	MASTER    = "master"
+	CANDIDATE = "candidate"
+	BACKUP    = "backup"
+)
+
 type Node struct {
 	m *manager
 }
@@ -22,6 +28,7 @@ type manager struct {
 	groupPort         string
 	priority          int
 	timeout           *time.Timer
+	timeoutLocker     sync.Mutex
 	conn              *net.UDPConn
 	rootContext       context.Context
 	rootCancel        context.CancelFunc
@@ -80,22 +87,26 @@ func (m *manager) heartBeatHandler(n int, data []byte) {
 	}
 	logrus.Infof("received heartbeat, priority is %v, time is %v", hb.Priority, time.Unix(hb.Timestamp, 0))
 	if m.checkMasterQualification(hb.Priority) {
+		m.timeoutLocker.Lock()
+		if m.timeout != nil && m.timeout.Stop() {
+			m.timeout.Reset(2 * time.Second)
+		}
+		m.timeoutLocker.Unlock()
 		if m.state != "backup" {
+			logrus.Info("other node has higher priority, work as backup")
 			m.statelocker.Lock()
-			m.state = "backup"
+			m.state = BACKUP
 			m.statelocker.Unlock()
 			m.stateChan <- 1
 		}
 	} else {
-		if m.state == "backup" {
+		if m.state == BACKUP {
+			logrus.Info("master node has lower priority, start candidate")
 			m.statelocker.Lock()
-			m.state = "candidate"
+			m.state = CANDIDATE
 			m.statelocker.Unlock()
 			m.stateChan <- 1
 		}
-	}
-	if m.timeout.Stop() {
-		m.timeout.Reset(2 * time.Second)
 	}
 }
 
@@ -133,14 +144,14 @@ func (m *manager) checkMasterQualification(priority int) (result bool) {
 }
 
 func (m *manager) candidate(ctx context.Context) {
-	logrus.Info("heartbeat timeout, start candidate")
+	logrus.Info("start candidate")
 	m.candidateFlag.Store(true)
 	timer := time.NewTimer(m.candidateDuration)
 	select {
 	case <-timer.C:
 		logrus.Info("win candidate, work as master")
 		m.statelocker.Lock()
-		m.state = "master"
+		m.state = MASTER
 		m.statelocker.Unlock()
 		m.candidateFlag.Store(false)
 		m.stateChan <- 1
@@ -151,7 +162,7 @@ func (m *manager) candidate(ctx context.Context) {
 			<-timer.C
 		}
 		m.statelocker.Lock()
-		m.state = "backup"
+		m.state = BACKUP
 		m.statelocker.Unlock()
 		m.candidateFlag.Store(false)
 		m.stateChan <- 1
@@ -162,23 +173,22 @@ func (m *manager) candidate(ctx context.Context) {
 // 注册选举程序，如果在trigAfter时间内没收到心跳，选举程序就会触发
 func (m *manager) registerCandidate() {
 	trigFunc := func() {
-		childCtx, cancel := context.WithCancel(m.rootContext)
-		m.candiCanncel = cancel
 		var state string
 		m.statelocker.RLock()
 		state = m.state
 		m.statelocker.RUnlock()
-		if state == "master" {
+		if state == MASTER {
 			return
-		} else if state == "backup" {
+		} else if state == BACKUP {
 			m.statelocker.Lock()
-			m.state = "candidate"
+			m.state = CANDIDATE
 			m.statelocker.Unlock()
 			m.stateChan <- 1
 		}
-		m.candidate(childCtx)
 	}
+	m.timeoutLocker.Lock()
 	m.timeout = time.AfterFunc(m.trigAfter, trigFunc)
+	m.timeoutLocker.Unlock()
 }
 
 func (n *Node) Listen(custom MulticastHandler) (err error) {
@@ -191,7 +201,11 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 		}
 		n.m.heartBeatHandler(size, data)
 	}
-	n.m.registerCandidate()
+	n.m.statelocker.RLock()
+	if n.m.state == BACKUP {
+		n.m.registerCandidate()
+	}
+	n.m.statelocker.RUnlock()
 	ctx, cancel := context.WithCancel(n.m.rootContext)
 	defer cancel()
 	logrus.Info("start listening")
@@ -247,7 +261,7 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 	state = m.state
 	m.statelocker.RUnlock()
 	switch state {
-	case "backup":
+	case BACKUP:
 		if m.beatFlag.Load() {
 			m.beatCanncel()
 		}
@@ -257,9 +271,13 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 		if m.candidateFlag.Load() {
 			m.candiCanncel()
 		}
-		m.timeout.Stop()
+		m.timeoutLocker.Lock()
+		if m.timeout != nil {
+			m.timeout.Stop()
+		}
+		m.timeoutLocker.Unlock()
 		m.registerCandidate()
-	case "master":
+	case MASTER:
 		if !m.beatFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
 			m.beatCanncel = cancel
@@ -275,12 +293,21 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 				go m.start(ctx, job)
 			}
 		}
-	case "candidate":
+		m.timeoutLocker.Lock()
+		if m.timeout != nil {
+			m.timeout.Stop()
+		}
+		m.timeoutLocker.Unlock()
+	case CANDIDATE:
 		if !m.beatFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
 			m.beatCanncel = cancel
 			go m.sendHeatBeatLoop(ctx)
-
+		}
+		if !m.candidateFlag.Load() {
+			ctx, cancel := context.WithCancel(m.rootContext)
+			m.candiCanncel = cancel
+			go m.candidate(ctx)
 		}
 	default:
 		logrus.Error("unrecognizable state")
@@ -292,19 +319,23 @@ func (n *Node) WatchAndRun(job func(context.Context), recovery bool, duration ti
 		err = errors.New("can not start on a nil node")
 	}
 	defer func() {
+		n.m.timeoutLocker.Lock()
 		if n.m.timeout != nil {
 			n.m.timeout.Stop()
 		}
+		n.m.timeoutLocker.Unlock()
 	}()
+	n.m.timeoutLocker.Lock()
 	if n.m.timeout != nil {
 		n.m.timeout.Stop()
 		n.m.timeout.Reset(n.m.trigAfter)
 	}
+	n.m.timeoutLocker.Unlock()
 	var state string
 	n.m.statelocker.RLock()
 	state = n.m.state
 	n.m.statelocker.RUnlock()
-	if state == "master" {
+	if state == MASTER {
 		jctx, jCanncel := context.WithCancel(n.m.rootContext)
 		bctx, bCanncel := context.WithCancel(n.m.rootContext)
 		n.m.jobCanncel = jCanncel
