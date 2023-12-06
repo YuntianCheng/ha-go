@@ -10,8 +10,8 @@ const MAXREADSIZE = 100
 
 type MulticastHandler func(size int, addr *net.UDPAddr, data []byte)
 
-func (m *manager) listenMultiCast(ctx context.Context, handler MulticastHandler) {
-	err := m.conn.SetReadBuffer(MAXREADSIZE)
+func (m *manager) listenMultiCast(ctx context.Context, handler MulticastHandler) (err error) {
+	err = m.conn.SetReadBuffer(MAXREADSIZE)
 	if err != nil {
 		return
 	}
@@ -33,4 +33,5 @@ func (m *manager) listenMultiCast(ctx context.Context, handler MulticastHandler)
 		}
 	}()
 	<-ctx.Done()
+	return
 }

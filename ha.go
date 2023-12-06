@@ -207,6 +207,7 @@ func (m *manager) registerCandidate() {
 func (n *Node) Listen(custom MulticastHandler) (err error) {
 	if n.m == nil {
 		err = errors.New("can not listen on nil conn")
+		return
 	}
 	handler := func(size int, addr *net.UDPAddr, data []byte) {
 		if custom != nil {
@@ -222,12 +223,12 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 	ctx, cancel := context.WithCancel(n.m.rootContext)
 	defer cancel()
 	logrus.Info("start listening")
-	n.m.listenMultiCast(ctx, handler)
+	err = n.m.listenMultiCast(ctx, handler)
 	return
 }
 
 // 一次性Job用这个执行
-func (m *manager) start(ctx context.Context, job func(context.Context)) {
+func (m *manager) do(ctx context.Context, job func(context.Context)) {
 	defer func() {
 		if p := recover(); p != nil {
 			logrus.Infof("Panic happened：%v", p)
@@ -241,7 +242,7 @@ func (m *manager) start(ctx context.Context, job func(context.Context)) {
 }
 
 // 需要持续运行的Job调用这个执行，panic会自动重启Job，直到上下文被取消
-func (m *manager) startWithRecovery(ctx context.Context, job func(context.Context), recoverTime time.Duration) {
+func (m *manager) doWithRecovery(ctx context.Context, job func(context.Context), recoverTime time.Duration) {
 	recoverer := func(childCtx context.Context, f func(context.Context)) {
 		defer func() {
 			if p := recover(); p != nil {
@@ -301,9 +302,9 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 			ctx, cancel := context.WithCancel(m.rootContext)
 			m.jobCanncel = cancel
 			if recovery {
-				go m.startWithRecovery(ctx, job, duration)
+				go m.doWithRecovery(ctx, job, duration)
 			} else {
-				go m.start(ctx, job)
+				go m.do(ctx, job)
 			}
 		}
 		m.timeoutLocker.Lock()
@@ -355,9 +356,9 @@ func (n *Node) WatchAndRun(job func(context.Context), recovery bool, duration ti
 		n.m.beatCanncel = bCanncel
 		go n.m.sendHeatBeatLoop(bctx)
 		if recovery {
-			go n.m.startWithRecovery(jctx, job, duration)
+			go n.m.doWithRecovery(jctx, job, duration)
 		} else {
-			go n.m.start(jctx, job)
+			go n.m.do(jctx, job)
 		}
 	}
 	for {
