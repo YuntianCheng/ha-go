@@ -2,9 +2,9 @@ package ha
 
 import (
 	"context"
-	"errors"
 	"github.com/sirupsen/logrus"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -31,8 +31,10 @@ func (m *manager) readMultiCastData(ctx context.Context, handler MulticastHandle
 				return
 			}
 			num, addr, err := m.conn.ReadFromUDP(b)
-			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-				logrus.Error(err.Error())
+			if err != nil {
+				if !strings.Contains(err.Error(), "i/o timeout") {
+					logrus.Error(err.Error())
+				}
 				continue
 			}
 			go handler(num, addr, b)
