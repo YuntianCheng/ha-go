@@ -24,27 +24,34 @@ type Node struct {
 }
 
 type manager struct {
-	groupIp           string
-	groupPort         string
-	groupId           string
-	priority          int
-	timeout           *time.Timer
-	timeoutLocker     sync.Mutex
-	conn              *net.UDPConn
-	rootContext       context.Context
-	rootCancel        context.CancelFunc
+	groupIp   string
+	groupPort string
+	groupId   string
+	priority  int
+
+	timeout       *time.Timer
+	timeoutLocker sync.Mutex
+
+	conn *net.UDPConn
+
+	rootContext context.Context
+	rootCancel  context.CancelFunc
+
 	heatbeatFrequency time.Duration
 	trigAfter         time.Duration
 	candidateDuration time.Duration
-	statelocker       sync.RWMutex
-	beatCanncel       context.CancelFunc
-	candiCanncel      context.CancelFunc
-	jobCanncel        context.CancelFunc
-	beatFlag          atomic.Bool
-	jobFlag           atomic.Bool
-	candidateFlag     atomic.Bool
-	stateChan         chan int
-	state             string
+
+	statelocker sync.RWMutex
+	state       string
+	stateChan   chan int
+
+	beatCanncel  context.CancelFunc
+	candiCanncel context.CancelFunc
+	jobCanncel   context.CancelFunc
+
+	beatFlag      atomic.Bool
+	jobFlag       atomic.Bool
+	candidateFlag atomic.Bool
 }
 
 func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
@@ -204,9 +211,9 @@ func (m *manager) registerCandidate() {
 	m.timeoutLocker.Unlock()
 }
 
-func (n *Node) Listen(custom MulticastHandler) (err error) {
+func (n *Node) ReadHeartbeat(custom MulticastHandler) (err error) {
 	if n.m == nil {
-		err = errors.New("can not listen on nil conn")
+		err = errors.New("can not read on nil conn")
 		return
 	}
 	handler := func(size int, addr *net.UDPAddr, data []byte) {
@@ -221,9 +228,9 @@ func (n *Node) Listen(custom MulticastHandler) (err error) {
 	}
 	n.m.statelocker.RUnlock()
 	ctx, cancel := context.WithCancel(n.m.rootContext)
+	logrus.Info("start reading heartbeat")
 	defer cancel()
-	logrus.Info("start listening")
-	err = n.m.listenMultiCast(ctx, handler)
+	err = n.m.readMultiCastData(ctx, handler)
 	return
 }
 

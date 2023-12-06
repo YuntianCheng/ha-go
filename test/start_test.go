@@ -16,7 +16,7 @@ func TestMaster(t *testing.T) {
 		return
 	}
 	go func() {
-		err = node.Listen(nil)
+		err = node.ReadHeartbeat(nil)
 		if err != nil {
 			fmt.Println(err.Error())
 			node.Stop()
