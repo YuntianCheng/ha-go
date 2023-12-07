@@ -17,12 +17,12 @@ func (m *manager) sendHeatbeat(heatbeat models.Heartbeat) (err error) {
 	addr := m.groupIp + ":" + m.groupPort
 	uAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		logrus.Error(err.Error())
+		//logrus.Error(err.Error())
 		return
 	}
 	_, err = m.conn.WriteToUDP(data, uAddr)
-	if err != nil {
-		logrus.Error(err.Error())
-	}
+	//if err != nil {
+	//	logrus.Error(err.Error())
+	//}
 	return
 }
