@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"ha"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -31,9 +32,9 @@ func TestMaster(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				fmt.Println("Doing my job")
+				logrus.Infof("the num of running go rountine is %d", runtime.NumGoroutine())
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(3 * time.Second)
 		}
 	}
 	go func() {
