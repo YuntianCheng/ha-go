@@ -92,6 +92,8 @@ func (n *Node) Status() (status string) {
 func (n *Node) Stop() {
 	if n.m != nil {
 		n.m.rootCancel()
+		_ = n.m.conn.Close()
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -273,6 +275,7 @@ func (m *manager) doWithRecovery(ctx context.Context, job func(context.Context),
 			logrus.Info("start job")
 			recoverer(watcherCtx, job)
 		}
+		time.Sleep(recoverTime)
 	}
 }
 

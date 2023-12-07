@@ -17,12 +17,10 @@ func (m *manager) readMultiCastData(ctx context.Context, handler MulticastHandle
 	if err != nil {
 		return
 	}
-	defer func() {
-		logrus.Info("quit reading")
-	}()
 	for {
 		select {
 		case <-ctx.Done():
+			logrus.Info("quit reading")
 			return
 		default:
 			b := make([]byte, MAXREADSIZE)
