@@ -37,17 +37,17 @@ type manager struct {
 	rootContext context.Context
 	rootCancel  context.CancelFunc
 
-	heatbeatFrequency time.Duration
-	trigAfter         time.Duration
-	candidateDuration time.Duration
+	heartbeatFrequency time.Duration
+	trigAfter          time.Duration
+	candidateDuration  time.Duration
 
-	statelocker sync.RWMutex
+	stateLocker sync.RWMutex
 	state       string
 	stateChan   chan int
 
-	beatCanncel  context.CancelFunc
-	candiCanncel context.CancelFunc
-	jobCanncel   context.CancelFunc
+	beatCancel  context.CancelFunc
+	candiCancel context.CancelFunc
+	jobCancel   context.CancelFunc
 
 	beatFlag      atomic.Bool
 	jobFlag       atomic.Bool
@@ -57,15 +57,15 @@ type manager struct {
 func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
 	n = &Node{
 		m: &manager{
-			groupIp:           groupIp,
-			groupPort:         groupPort,
-			groupId:           groupId,
-			heatbeatFrequency: hbFrequency,
-			trigAfter:         trigAfter,
-			candidateDuration: candidateDuration,
-			state:             state,
-			priority:          priority,
-			stateChan:         make(chan int),
+			groupIp:            groupIp,
+			groupPort:          groupPort,
+			groupId:            groupId,
+			heartbeatFrequency: hbFrequency,
+			trigAfter:          trigAfter,
+			candidateDuration:  candidateDuration,
+			state:              state,
+			priority:           priority,
+			stateChan:          make(chan int),
 		},
 	}
 	n.m.rootContext, n.m.rootCancel = context.WithCancel(ctx)
@@ -83,9 +83,9 @@ func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, sta
 }
 
 func (n *Node) Status() (status string) {
-	n.m.statelocker.RLock()
+	n.m.stateLocker.RLock()
 	status = n.m.state
-	n.m.statelocker.RUnlock()
+	n.m.stateLocker.RUnlock()
 	return
 }
 
@@ -115,33 +115,33 @@ func (m *manager) heartBeatHandler(n int, data []byte) {
 		m.timeoutLocker.Unlock()
 		if m.state != "backup" {
 			logrus.Info("other node has higher priority, work as backup")
-			m.statelocker.Lock()
+			m.stateLocker.Lock()
 			m.state = BACKUP
-			m.statelocker.Unlock()
+			m.stateLocker.Unlock()
 			m.stateChan <- 1
 		}
 	} else {
 		if m.state == BACKUP {
 			logrus.Info("master node has lower priority, start candidate")
-			m.statelocker.Lock()
+			m.stateLocker.Lock()
 			m.state = CANDIDATE
-			m.statelocker.Unlock()
+			m.stateLocker.Unlock()
 			m.stateChan <- 1
 		}
 	}
 }
 
 func (m *manager) sendHeatBeatLoop(ctx context.Context) {
-	heatbeatTicker := time.NewTicker(m.heatbeatFrequency)
+	heartbeatTicker := time.NewTicker(m.heartbeatFrequency)
 	m.beatFlag.Store(true)
 	defer func() {
 		m.beatFlag.Store(false)
-		heatbeatTicker.Stop()
+		heartbeatTicker.Stop()
 	}()
 	logrus.Info("start sending heartbeat")
 	for {
 		select {
-		case <-heatbeatTicker.C:
+		case <-heartbeatTicker.C:
 			heatbeat := models.Heartbeat{
 				Priority:  m.priority,
 				Timestamp: time.Now().Unix(),
@@ -172,9 +172,9 @@ func (m *manager) candidate(ctx context.Context) {
 	select {
 	case <-timer.C:
 		logrus.Info("win candidate, work as master")
-		m.statelocker.Lock()
+		m.stateLocker.Lock()
 		m.state = MASTER
-		m.statelocker.Unlock()
+		m.stateLocker.Unlock()
 		m.candidateFlag.Store(false)
 		m.stateChan <- 1
 		return
@@ -183,28 +183,28 @@ func (m *manager) candidate(ctx context.Context) {
 		if !timer.Stop() {
 			<-timer.C
 		}
-		m.statelocker.Lock()
+		m.stateLocker.Lock()
 		m.state = BACKUP
-		m.statelocker.Unlock()
+		m.stateLocker.Unlock()
 		m.candidateFlag.Store(false)
 		m.stateChan <- 1
 		return
 	}
 }
 
-// 注册选举程序，如果在trigAfter时间内没收到心跳，选举程序就会触发
+// 注册选举程序触发函数，如果在trigAfter时间内没收到心跳，选举程序就会触发
 func (m *manager) registerCandidate() {
 	trigFunc := func() {
 		var state string
-		m.statelocker.RLock()
+		m.stateLocker.RLock()
 		state = m.state
-		m.statelocker.RUnlock()
+		m.stateLocker.RUnlock()
 		if state == MASTER {
 			return
 		} else if state == BACKUP {
-			m.statelocker.Lock()
+			m.stateLocker.Lock()
 			m.state = CANDIDATE
-			m.statelocker.Unlock()
+			m.stateLocker.Unlock()
 			m.stateChan <- 1
 		}
 	}
@@ -224,11 +224,11 @@ func (n *Node) ReadHeartbeat(custom MulticastHandler) (err error) {
 		}
 		n.m.heartBeatHandler(size, data)
 	}
-	n.m.statelocker.RLock()
+	n.m.stateLocker.RLock()
 	if n.m.state == BACKUP {
 		n.m.registerCandidate()
 	}
-	n.m.statelocker.RUnlock()
+	n.m.stateLocker.RUnlock()
 	ctx, cancel := context.WithCancel(n.m.rootContext)
 	logrus.Info("start reading heartbeat")
 	defer cancel()
@@ -281,19 +281,19 @@ func (m *manager) doWithRecovery(ctx context.Context, job func(context.Context),
 
 func (m *manager) workStatus(job func(context.Context), recovery bool, duration time.Duration) {
 	var state string
-	m.statelocker.RLock()
+	m.stateLocker.RLock()
 	state = m.state
-	m.statelocker.RUnlock()
+	m.stateLocker.RUnlock()
 	switch state {
 	case BACKUP:
 		if m.beatFlag.Load() {
-			m.beatCanncel()
+			m.beatCancel()
 		}
 		if m.jobFlag.Load() {
-			m.jobCanncel()
+			m.jobCancel()
 		}
 		if m.candidateFlag.Load() {
-			m.candiCanncel()
+			m.candiCancel()
 		}
 		m.timeoutLocker.Lock()
 		if m.timeout != nil {
@@ -304,13 +304,13 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 	case MASTER:
 		if !m.beatFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
-			m.beatCanncel = cancel
+			m.beatCancel = cancel
 			go m.sendHeatBeatLoop(ctx)
 
 		}
 		if !m.jobFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
-			m.jobCanncel = cancel
+			m.jobCancel = cancel
 			if recovery {
 				go m.doWithRecovery(ctx, job, duration)
 			} else {
@@ -325,12 +325,12 @@ func (m *manager) workStatus(job func(context.Context), recovery bool, duration 
 	case CANDIDATE:
 		if !m.beatFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
-			m.beatCanncel = cancel
+			m.beatCancel = cancel
 			go m.sendHeatBeatLoop(ctx)
 		}
 		if !m.candidateFlag.Load() {
 			ctx, cancel := context.WithCancel(m.rootContext)
-			m.candiCanncel = cancel
+			m.candiCancel = cancel
 			go m.candidate(ctx)
 		}
 	default:
@@ -356,14 +356,14 @@ func (n *Node) WatchAndRun(job func(context.Context), recovery bool, duration ti
 	}
 	n.m.timeoutLocker.Unlock()
 	var state string
-	n.m.statelocker.RLock()
+	n.m.stateLocker.RLock()
 	state = n.m.state
-	n.m.statelocker.RUnlock()
+	n.m.stateLocker.RUnlock()
 	if state == MASTER {
 		jctx, jCanncel := context.WithCancel(n.m.rootContext)
 		bctx, bCanncel := context.WithCancel(n.m.rootContext)
-		n.m.jobCanncel = jCanncel
-		n.m.beatCanncel = bCanncel
+		n.m.jobCancel = jCanncel
+		n.m.beatCancel = bCanncel
 		go n.m.sendHeatBeatLoop(bctx)
 		if recovery {
 			go n.m.doWithRecovery(jctx, job, duration)
