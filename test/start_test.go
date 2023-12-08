@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"ha"
-	"runtime"
 	"testing"
 	"time"
 )
 
 func TestMaster(t *testing.T) {
-	node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "001", "master", 1*time.Second, 5*time.Second, 5*time.Second)
+	node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "001", "backup", 1*time.Second, 5*time.Second, 5*time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
@@ -32,7 +31,7 @@ func TestMaster(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				logrus.Infof("the num of running go rountine is %d", runtime.NumGoroutine())
+				logrus.Info("doing my job")
 			}
 			time.Sleep(3 * time.Second)
 		}

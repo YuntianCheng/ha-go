@@ -92,8 +92,8 @@ func (n *Node) Status() (status string) {
 func (n *Node) Stop() {
 	if n.m != nil {
 		n.m.rootCancel()
-		_ = n.m.conn.Close()
 		time.Sleep(1 * time.Second)
+		_ = n.m.conn.Close()
 	}
 }
 
@@ -195,6 +195,7 @@ func (m *manager) candidate(ctx context.Context) {
 // 注册选举程序触发函数，如果在trigAfter时间内没收到心跳，选举程序就会触发
 func (m *manager) registerCandidate() {
 	trigFunc := func() {
+		logrus.Info("heartbeat timeout, prepare to candidate")
 		var state string
 		m.stateLocker.RLock()
 		state = m.state
@@ -242,7 +243,7 @@ func (m *manager) do(ctx context.Context, job func(context.Context)) {
 		if p := recover(); p != nil {
 			logrus.Infof("Panic happened：%v", p)
 		}
-		logrus.Info("stop job")
+		logrus.Info("job stopped")
 		m.jobFlag.Store(false)
 	}()
 	m.jobFlag.Store(true)
@@ -265,7 +266,7 @@ func (m *manager) doWithRecovery(ctx context.Context, job func(context.Context),
 	defer func() {
 		m.jobFlag.Store(false)
 		watcherCancel()
-		logrus.Info("stop job")
+		logrus.Info("job stopped")
 	}()
 	for {
 		select {
@@ -275,6 +276,7 @@ func (m *manager) doWithRecovery(ctx context.Context, job func(context.Context),
 			logrus.Info("start job")
 			recoverer(watcherCtx, job)
 		}
+		logrus.Info("waiting")
 		time.Sleep(recoverTime)
 	}
 }
