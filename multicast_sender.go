@@ -8,13 +8,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (m *manager) sendHeatbeat(heatbeat models.Heartbeat) (err error) {
+func (m *manager) sendUniCastHeartbeat(heatbeat models.Heartbeat, addr string) (err error) {
 	data, err := json.Marshal(&heatbeat)
 	if err != nil {
 		logrus.Error(err.Error())
 		return
 	}
-	addr := m.groupIp + ":" + m.groupPort
 	uAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		//logrus.Error(err.Error())

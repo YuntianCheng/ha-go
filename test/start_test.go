@@ -10,11 +10,13 @@ import (
 )
 
 func TestMaster(t *testing.T) {
-	node, err := ha.NewNode(context.Background(), 100, "224.0.0.18", "2345", "001", "backup", 1*time.Second, 5*time.Second, 5*time.Second)
+	nodes := []string{"59.63.209.245:2345", "106.227.10.14:2345", "182.106.186.139:2345"}
+	node, err := ha.NewUnicastNode(context.Background(), 100, "2345", "backup", 1*time.Second, 5*time.Second, 5*time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
+	node.AddFriends(nodes)
 	go func() {
 		err = node.ReadHeartbeat(nil)
 		if err != nil {

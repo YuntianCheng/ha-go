@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"ha/models"
 	"net"
 	"sync"
@@ -24,10 +25,11 @@ type Node struct {
 }
 
 type manager struct {
-	groupIp   string
-	groupPort string
-	groupId   string
-	priority  int
+	nodesLocker sync.RWMutex
+	nodes       []string
+	port        string
+
+	priority int
 
 	timeout       *time.Timer
 	timeoutLocker sync.Mutex
@@ -54,12 +56,10 @@ type manager struct {
 	candidateFlag atomic.Bool
 }
 
-func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
+func NewUnicastNode(ctx context.Context, priority int, port, state string, hbFrequency, trigAfter, candidateDuration time.Duration) (n *Node, err error) {
 	n = &Node{
 		m: &manager{
-			groupIp:            groupIp,
-			groupPort:          groupPort,
-			groupId:            groupId,
+			port:               port,
 			heartbeatFrequency: hbFrequency,
 			trigAfter:          trigAfter,
 			candidateDuration:  candidateDuration,
@@ -69,13 +69,12 @@ func NewNode(ctx context.Context, priority int, groupIp, groupPort, groupId, sta
 		},
 	}
 	n.m.rootContext, n.m.rootCancel = context.WithCancel(ctx)
-	addr := n.m.groupIp + ":" + n.m.groupPort
-	uAddr, err := net.ResolveUDPAddr("udp", addr)
+	uAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%s", n.m.port))
 	if err != nil {
 		n = nil
 		return
 	}
-	n.m.conn, err = net.ListenMulticastUDP("udp", nil, uAddr)
+	n.m.conn, err = net.ListenUDP("udp", uAddr)
 	if err != nil {
 		n = nil
 	}
@@ -97,16 +96,25 @@ func (n *Node) Stop() {
 	}
 }
 
+func (n *Node) AddFriend(node string) {
+	n.m.nodesLocker.Lock()
+	n.m.nodes = append(n.m.nodes, node)
+	n.m.nodesLocker.Unlock()
+}
+
+func (n *Node) AddFriends(nodes []string) {
+	n.m.nodesLocker.Lock()
+	n.m.nodes = append(n.m.nodes, nodes...)
+	n.m.nodesLocker.Unlock()
+}
+
 func (m *manager) heartBeatHandler(n int, data []byte) {
 	var hb models.Heartbeat
 	err := json.Unmarshal(data[:n], &hb)
 	if err != nil {
 		logrus.Error(err)
 	}
-	if hb.GroupId != m.groupId {
-		return
-	}
-	logrus.Infof("received heartbeat, priority is %v, time is %v, group id is %v", hb.Priority, time.Unix(hb.Timestamp, 0), hb.GroupId)
+	logrus.Infof("received heartbeat, priority is %v, time is %v", hb.Priority, time.Unix(hb.Timestamp, 0))
 	if m.checkMasterQualification(hb.Priority) {
 		m.timeoutLocker.Lock()
 		if m.timeout != nil && m.timeout.Stop() {
@@ -142,17 +150,20 @@ func (m *manager) sendHeatBeatLoop(ctx context.Context) {
 	for {
 		select {
 		case <-heartbeatTicker.C:
-			heatbeat := models.Heartbeat{
+			heartbeat := models.Heartbeat{
 				Priority:  m.priority,
 				Timestamp: time.Now().Unix(),
-				GroupId:   m.groupId,
 			}
-			err := m.sendHeatbeat(heatbeat)
-			if err != nil {
-				logrus.Error(err.Error())
-			} else {
-				logrus.Info("send heartbeat successful")
+			m.nodesLocker.RLock()
+			for _, node := range m.nodes {
+				err := m.sendUniCastHeartbeat(heartbeat, node)
+				if err != nil {
+					logrus.Errorf("send heartbeat to node %s faild, error is %s", node, err.Error())
+				} else {
+					logrus.Infof("send heartbeat to node %s successful", node)
+				}
 			}
+			m.nodesLocker.RUnlock()
 		case <-ctx.Done():
 			logrus.Info("stop sending heartbeat")
 			return
